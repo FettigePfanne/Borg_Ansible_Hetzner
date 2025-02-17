@@ -1,0 +1,139 @@
+- name: Aktualisiere SSH-Schlüssel auf Hetzner Storage Box
+  hosts: storage
+  become: yes
+  vars_files:
+     - config_vars.yml
+     - password.yml
+  tasks:
+    - name: Prüfe, ob BorgBackup installiert ist
+      command: borg --version
+      register: borg_installed
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Installiere BorgBackup, falls nicht vorhanden
+      become: true
+      apt:
+        name: borgbackup
+        state: present
+      when: borg_installed.rc != 0
+
+    - name: Prüfe, ob sshpass installiert ist
+      command: sshpass -V
+      register: sshpass_installed
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Installiere sshpass, falls nicht vorhanden
+      become: true
+      apt:
+        name: sshpass
+        state: present
+      when: sshpass_installed.rc != 0
+
+    - name: .ssh Ordner Erstellen
+      ansible.builtin.file:
+        path: ~/.ssh
+        state: directory
+        mode: '0755'
+
+    - name: Erstelle .ssh Ordner auf der Storage-Box
+      ansible.builtin.command:
+        cmd: "sshpass -p '{{ STORAGE_PASSWORD }}' ssh -o StrictHostKeyChecking=no -p 23 {{ STORAGE_USERNAME }}@{{ STORAGE_IP }} 'mkdir -p /home/.ssh'"
+      delegate_to: localhost
+
+    - name: Erstelle authorized_keys datei auf der Storage-Box
+      ansible.builtin.command:
+        cmd: "sshpass -p '{{ STORAGE_PASSWORD }}' ssh -o StrictHostKeyChecking=no -p 23 {{ STORAGE_USERNAME }}@{{ STORAGE_IP }} 'touch /home/.ssh/authorized_keys'"
+      #delegate_to: localhost
+
+    - name: Prüfe, ob der SSH-Schlüssel bereits existiert
+      stat:
+        path: "~/.ssh/id_ed25519"
+      register: ssh_key
+
+    - name: Generiere den SSH-Schlüssel, falls er nicht existiert
+      command: ssh-keygen -t ed25519 -C "" -f ~/.ssh/id_ed25519 -N ""
+      when: not ssh_key.stat.exists
+
+    - name: mount Ordner Erstellen
+      ansible.builtin.file:
+        path: /mnt/Storagebox
+        state: directory
+        mode: '0755'
+
+    - name: Mount Storage Box über CIFS
+      command: mount.cifs -o user="{{ STORAGE_USERNAME }}",pass="{{ STORAGE_PASSWORD }}" //"{{ MOUNT_POINT }}" /mnt/Storagebox
+
+
+    - name: Lese den neuen SSH-Public Key aus
+      command: cat ~/.ssh/id_ed25519.pub
+      register: public_key
+
+    - name: Füge den neuen Public Key in `authorized_keys` ein
+      lineinfile:
+        path: /mnt/Storagebox/.ssh/authorized_keys
+        line: "{{ public_key.stdout }}"
+        state: present
+        create: yes
+
+    - name: Unmount Storage Box
+      command: umount -l /mnt/Storagebox
+
+
+    - name: Erstelle Ordner auf der Storage-Box mit Hostnamen
+      ansible.builtin.command:
+        cmd: "ssh -p 23 {{ STORAGE_USERNAME }}@{{ STORAGE_IP }} 'mkdir -p {{ BACKUP_PFAD }}{{ ansible_hostname }}'"
+      #delegate_to: localhost
+
+    - name: Setze die Umgebungsvariable BORG_RSH
+      ansible.builtin.lineinfile:
+        path: ~/.bashrc
+        line: "export BORG_RSH='ssh -i ~/.ssh/id_ed25519'"
+        state: present
+        create: yes
+
+    - name: Borg Password export
+      ansible.builtin.lineinfile:
+        path: ~/bashrc
+        line: "export BORG_PASSPHRASE='{{ BORG_PASSWORD }}'"
+        state: present
+        create: yes
+    - name: Initialisiere BorgBackup Repository mit Verschlüsselung
+      command: >
+        borg init --encryption=repokey
+        ssh://{{ STORAGE_USERNAME }}@{{ STORAGE_IP }}:{{ STORAGE_PORT }}{{ BACKUP_PFAD }}{{ ansible_hostname }}
+      environment:
+        BORG_PASSPHRASE: "{{ BORG_PASSWORD }}"
+      register: borg_init_result
+      changed_when: "'A repository already exists' not in borg_init_result.stderr"
+
+    - name: Ensure the script is present
+      copy:
+        src: autoconfig.sh
+        dest: /home/autoconfig.sh
+        mode: '0755'
+
+    - name: Ausführung der autoconfig
+      shell: /home/autoconfig.sh
+      args:
+        executable: /bin/bash
+        chdir: /home
+      register: script_output
+      environment:
+        STORAGE_IP: "{{ STORAGE_IP }}"
+        STORAGE_PORT: "{{ STORAGE_PORT }}"
+        STORAGE_USERNAME: "{{ STORAGE_USERNAME }}"
+        STORAGE_PASSWORD: "{{ STORAGE_PASSWORD }}"
+        BACKUP_PFAD: "{{ BACKUP_PFAD }}"
+        ORDNER_NAME: "{{ ansible_hostname }}"
+        BORG_PASSWORD: "{{ BORG_PASSWORD }}"
+
+    - name: Zeigt script output
+      debug:
+        var: script_output.stdout_lines
+
+    - name: Clean up the script
+      file:
+        path: /home/autoconfig.sh
+        state: absent

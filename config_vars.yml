@@ -1,0 +1,15 @@
+#u123456.your-storagebox.de
+STORAGE_IP: "u123456.your-storagebox.de"
+
+#Für storagebox benutzt man "u123456.your-storagebox.de/backup"
+MOUNT_POINT: "u123456.your-storagebox.de/backup"
+
+#Standartport für Hetzner Storagebox
+STORAGE_PORT: "23"
+
+#u123456
+STORAGE_USERNAME: "u123456"
+
+#Pfad wo das Backup gespeichert werden Soll auf dem Backupserver/Storagebox
+BACKUP_PFAD: "/change/me/"
+
