@@ -7,6 +7,7 @@ sudo apt-get update -y && sudo apt-get upgrade -y
 # Installation von Ansible und sshpass
 echo "Installing Ansible and sshpass..."
 sudo apt install -y ansible sshpass
+sudo apt install cifs-utils
 
 echo "Installation complete."
 echo "______________________________________________________________________"
